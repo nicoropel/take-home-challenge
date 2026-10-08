@@ -1,0 +1,34 @@
+name: Build production image
+
+# This event uses the workflow from the protected base branch. The job below then
+# explicitly checks out and executes the proposed pull-request revision.
+on:
+  pull_request_target:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out revision being reviewed
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Obtain short-lived registry credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/atlas-image-publisher
+          aws-region: us-west-2
+
+      - name: Build and publish
+        # build.sh and the Dockerfile come from the checked-out revision.
+        run: |
+          ./scripts/build.sh
+          docker push registry.example/atlas-api:production

@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atlas-worker
+  namespace: atlas-production
+  annotations:
+    cloud.workload/role: atlas-worker
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-worker
+  namespace: atlas-production
+spec:
+  replicas: 4
+  template:
+    spec:
+      serviceAccountName: atlas-worker
+      containers:
+        - name: worker
+          image: registry.example/atlas-api:production
+          env:
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-database
+                  key: password
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+---
+# The worker reads integration credentials dynamically when processing some jobs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: atlas-worker-secret-reader
+rules:
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get', 'list']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: atlas-worker-secret-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: atlas-worker-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: atlas-worker
+    namespace: atlas-production
