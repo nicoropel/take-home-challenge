@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atlas-worker
+  namespace: atlas-production
+  annotations:
+    cloud.workload/role: atlas-worker
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-worker
+  namespace: atlas-production
+spec:
+  replicas: 4
+  selector:
+    matchLabels: { app: atlas-worker }
+  template:
+    metadata:
+      labels: { app: atlas-worker }
+    spec:
+      serviceAccountName: atlas-worker
+      automountServiceAccountToken: true
+      containers:
+        - name: worker
+          image: registry.example/atlas-api #Kustomization must be done to apply the latest productive image dinamically, then revised by a rego policy.
+          imagePullPolicy: Always
+          env:
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-database
+                  key: password
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+---
+# The worker reads integration credentials dynamically when processing some jobs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atlas-worker-secret-reader
+  namespace: atlas-production
+rules:
+  - apiGroups: ['']
+    resources: ['secrets']
+    resourceNames: ['atlas-database']
+    verbs: ['get']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atlas-worker-secret-reader
+  namespace: atlas-production
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: atlas-worker-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: atlas-worker
+    namespace: atlas-production

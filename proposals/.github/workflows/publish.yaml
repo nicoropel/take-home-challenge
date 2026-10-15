@@ -1,0 +1,109 @@
+name: Publish image
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: registry.example/atlas-api
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out merged revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Build and test without cloud access
+        run: ./scripts/build.sh
+
+      - name: Save image and record its ID
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          docker save --output image.tar "${IMAGE}:${TAG}"
+          docker image inspect --format '{{.Id}}' "${IMAGE}:${TAG}" > image-id.txt
+
+      - name: Upload the image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image
+          path: |
+            image.tar
+            image-id.txt
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production-publish
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: image
+      
+      - name: Load and verify image ID
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          docker load --input image.tar
+          EXPECTED=$(cat image-id.txt)
+          ACTUAL=$(docker image inspect --format '{{.Id}}' "${IMAGE}:${TAG}")
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "Image ID mismatch: expected $EXPECTED, got $ACTUAL" >&2
+            exit 1
+          fi
+
+      - name: Obtain short-lived registry credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/atlas-image-publisher
+          aws-region: us-west-2
+
+      - name: Log in to the registry
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Push and capture digest
+        id: push
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          OUT=$(docker push "${IMAGE}:${TAG}")
+          echo "$OUT"
+          DIGEST=$(echo "$OUT" | sed -n 's/.*digest: \(sha256:[a-f0-9]*\).*/\1/p')
+          test -n "$DIGEST"
+
+          # In this case, the production tag is what the manifests reference so it must point at the same content.
+          docker tag "${IMAGE}:${TAG}" "${IMAGE}:production"
+          PROD_OUT=$(docker push "${IMAGE}:production")
+          echo "$PROD_OUT"
+          PROD_DIGEST=$(echo "$PROD_OUT" | sed -n 's/.*digest: \(sha256:[a-f0-9]*\).*/\1/p')
+          test "$DIGEST" = "$PROD_DIGEST"
+
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "${IMAGE}@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sign by digest
+        env:
+          DIGEST_REF: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${DIGEST_REF}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

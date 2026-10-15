@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atlas-api
+  namespace: atlas-production
+  annotations:
+    cloud.workload/role: atlas-api-workload
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-api
+  namespace: atlas-production
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: atlas-api }
+  template:
+    metadata:
+      labels: { app: atlas-api }
+    spec:
+      serviceAccountName: atlas-api
+      automountServiceAccountToken: false
+      containers:
+        - name: api
+          image: registry.example/atlas-api #Kustomization must be done to apply the latest productive image dinamically, then revised by a rego policy.
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { cpu: '1', memory: 512Mi }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-public
+  namespace: atlas-production
+spec:
+  rules:
+    - host: api.atlas.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: atlas-api
+                port: { number: 8080 }
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-operations
+  namespace: atlas-production
+spec:
+  ingressClassName: internal
+  rules:
+    - host: ops.internal.atlas.example
+      http:
+        paths:
+          - path: /ops/reprocess
+            pathType: Prefix
+            backend:
+              service:
+                name: atlas-operations
+                port: { number: 8080 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-operations
+  namespace: atlas-production
+spec:
+  type: ClusterIP
+  selector: { app: atlas-api }
+  ports:
+    - port: 8080
+      targetPort: 8080
