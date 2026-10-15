@@ -1,5 +1,8 @@
 # Atlas Document Processing Platform
 
+## Challenge revision - Nicolas Oropel
+The complete review for this challenge is now available in [the review file.](REVIEW.md)
+
 ## Your task
 
 Review this system as if it were approaching production. Identify security risks, then present the three issues you would address first in priority order.
